@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { GeoPoint } from '../types'
@@ -85,15 +85,16 @@ function buildAxes(group: THREE.Group, ext: number): void {
   }
 
   const labels = new THREE.Group()
-  const spriteX = makeTextSprite('x', COLORS.axisX, ext * 0.28)
+  // Після транспозиції X↔Y: вісь уздовж three.x показує Y, уздовж three.z — X.
   const spriteY = makeTextSprite('y', COLORS.axisY, ext * 0.28)
+  const spriteX = makeTextSprite('x', COLORS.axisX, ext * 0.28)
   const spriteZ = makeTextSprite('z', COLORS.axisZ, ext * 0.28)
-  spriteX.position.set(len * 1.16, 0, 0)
-  spriteY.position.set(0, 0, len * 1.16)
+  spriteY.position.set(len * 1.16, 0, 0)
+  spriteX.position.set(0, 0, len * 1.16)
   spriteZ.position.set(0, len * 1.16, 0)
-  labels.add(spriteX, spriteY, spriteZ)
+  labels.add(spriteY, spriteX, spriteZ)
 
-  group.add(mkLine('x', COLORS.axisX), mkLine('y', COLORS.axisY), mkLine('z', COLORS.axisZ), labels)
+  group.add(mkLine('x', COLORS.axisY), mkLine('y', COLORS.axisX), mkLine('z', COLORS.axisZ), labels)
 }
 
 /** Напівпрозорі площини проєкцій та сітки. */
@@ -415,6 +416,9 @@ export function Viewport3D({ points, selectedId = null, onSelect, animate = fals
   const onSelectRef = useRef(onSelect)
   onSelectRef.current = onSelect
 
+  // Транспозиція X↔Y: осі узгоджені з 2D епюром (у 3D X іде вглиб, Y — праворуч).
+  const geo = useMemo(() => points.map((p) => ({ ...p, x: p.y, y: p.x })), [points])
+
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -424,15 +428,15 @@ export function Viewport3D({ points, selectedId = null, onSelect, animate = fals
   useEffect(() => {
     const st = stRef.current
     if (!st) return
-    rebuildData(st, points, selectedId)
-  }, [points, selectedId])
+    rebuildData(st, geo, selectedId)
+  }, [geo, selectedId])
 
   useEffect(() => {
     const st = stRef.current
     if (!st) return
-    if (animate) startSweeps(st, points)
+    if (animate) startSweeps(st, geo)
     else stopSweeps(st)
-  }, [animate, points])
+  }, [animate, geo])
 
   return (
     <div

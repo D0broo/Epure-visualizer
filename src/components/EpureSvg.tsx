@@ -91,7 +91,8 @@ function buildLayout(points: GeoPoint[]): Layout {
 
   const c30 = mL + (x1 - x0) * s + 46
   const axisY = H / 2
-  const sx = (x: number) => mL + (x - x0) * s
+  // X напрямлений ВЛІВО: більшому x відповідає менша координата екрана.
+  const sx = (x: number) => mL + (x1 - x) * s
   const sy2 = (z: number) => axisY - z * s
   const sy1 = (y: number) => axisY + y * s
   const p3x = (y: number) => c30 + y * s
@@ -143,7 +144,8 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
   const [cursor, setCursor] = useState<{ x: number; y: number; label: string } | null>(null)
   const drag = useRef<{ px: number; py: number } | null>(null)
   const pinch = useRef<{ dist: number; k: number; tx: number; ty: number } | null>(null)
-  const touchPoints = useRef(new Map<number, { x: number; y: number }>())
+  const lastTap = useRef<{ t: number; x: number; y: number } | null>(null)
+  const touchPoints = useRef(new Map<number, { x: number; y: number; sx: number; sy: number; moved: boolean }>())
 
   const layout = useMemo(() => buildLayout(points), [points])
   const { s, sx, sy2, sy1, p3x, c30, axisY, xTicks, zTicks, yTicks } = layout
@@ -307,10 +309,9 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
     if (!svg) return
 
     const onTouchStart = (e: TouchEvent) => {
-      e.preventDefault()
       for (const t of Array.from(e.changedTouches)) {
         const [x, y] = toSvg(t.clientX, t.clientY)
-        touchPoints.current.set(t.identifier, { x, y })
+        touchPoints.current.set(t.identifier, { x, y, sx: x, sy: y, moved: false })
       }
       if (touchPoints.current.size === 1) {
         const [p] = [...touchPoints.current.values()]
@@ -327,7 +328,11 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
       e.preventDefault()
       for (const t of Array.from(e.changedTouches)) {
         const [x, y] = toSvg(t.clientX, t.clientY)
-        touchPoints.current.set(t.identifier, { x, y })
+        const cur = touchPoints.current.get(t.identifier)
+        if (cur) {
+          const moved = cur.moved || Math.hypot(x - cur.sx, y - cur.sy) > 10
+          touchPoints.current.set(t.identifier, { ...cur, x, y, moved })
+        }
       }
 
       if (touchPoints.current.size >= 2 && pinch.current) {
@@ -353,7 +358,24 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
     }
 
     const onTouchEnd = (e: TouchEvent) => {
-      e.preventDefault()
+      const now = performance.now()
+      // Подвійний тап → зум (працює навіть якщо пінч не спрацьовує).
+      const [a] = [...touchPoints.current.values()]
+      if (touchPoints.current.size === 1 && a && !a.moved) {
+        const [x, y] = toSvg(e.changedTouches[0].clientX, e.changedTouches[0].clientY)
+        const prev = lastTap.current
+        if (prev && now - prev.t < 350 && Math.hypot(x - prev.x, y - prev.y) < 60) {
+          const v = viewRef.current
+          const k = v.k > 1.9 ? 1 : 3.2
+          const wx = (x - v.tx) / v.k
+          const wy = (y - v.ty) / v.k
+          setView({ k, tx: x - wx * k, ty: y - wy * k })
+          lastTap.current = null
+        } else {
+          lastTap.current = { t: now, x, y }
+        }
+      }
+
       for (const t of Array.from(e.changedTouches)) touchPoints.current.delete(t.identifier)
       if (touchPoints.current.size === 0) {
         drag.current = null
@@ -371,10 +393,10 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
       pinch.current = null
     }
 
-    svg.addEventListener('touchstart', onTouchStart, { passive: false })
+    svg.addEventListener('touchstart', onTouchStart)
     svg.addEventListener('touchmove', onTouchMove, { passive: false })
-    svg.addEventListener('touchend', onTouchEnd, { passive: false })
-    svg.addEventListener('touchcancel', onTouchCancel, { passive: false })
+    svg.addEventListener('touchend', onTouchEnd)
+    svg.addEventListener('touchcancel', onTouchCancel)
     return () => {
       svg.removeEventListener('touchstart', onTouchStart)
       svg.removeEventListener('touchmove', onTouchMove)
@@ -457,10 +479,10 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
             </>
           )}
 
-          {/* Ось Ox */}
+          {/* Ось Ox (напрямлена вліво) */}
           <line x1={mL - 10} y1={axisY} x2={W - mR} y2={axisY} stroke={C.ink} strokeWidth={1.6} />
-          <path d={`M ${W - mR} ${axisY} l -8 -3.5 v 7 z`} fill={C.ink} />
-          <text x={W - mR - 5} y={axisY - 9} fontSize={14} fontStyle="italic" fill={C.ink} fontFamily="serif" fontWeight={700}>
+          <path d={`M ${mL} ${axisY} l -8 -3.5 v 7 z`} fill={C.ink} />
+          <text x={mL + 6} y={axisY - 9} fontSize={14} fontStyle="italic" fill={C.ink} fontFamily="serif" fontWeight={700}>
             x
           </text>
 
@@ -533,19 +555,18 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
             </g>
           ))}
 
-          {/* Лінія зв'язку 45° (постійна) */}
-          {opts.bisector &&
-            opts.p3 && (
-              <line
-                x1={c30}
-                y1={axisY}
-                x2={c30 + (H - mB - axisY) * 0.94}
-                y2={H - mB}
-                stroke={C.gray}
-                strokeWidth={0.8}
-                strokeDasharray="5 4"
-              />
-            )}
+          {/* Лінія зв'язку 45° (постійна) від початку координат */}
+          {opts.bisector && (
+            <line
+              x1={ox}
+              y1={axisY}
+              x2={Math.min(W - mR, ox + (H - mB - axisY) * 0.94)}
+              y2={H - mB}
+              stroke={C.gray}
+              strokeWidth={0.8}
+              strokeDasharray="5 4"
+            />
+          )}
 
           {/* 45° передача Π₁ → Π₃ */}
           {opts.links &&
@@ -731,6 +752,9 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
 
       {/* Масштаб */}
       <div className="absolute right-2 top-2 z-10 flex flex-col gap-1">
+        <div className="pointer-events-none rounded border border-slate-300 bg-white/80 px-2 py-1 text-center font-mono text-[10px] font-semibold text-slate-600 shadow-sm backdrop-blur">
+          {Math.round(view.k * 100)}%
+        </div>
         <button className="btn pointer-events-auto h-7 w-7 !p-0 !text-sm" onClick={() => setView((v) => ({ ...v, k: Math.min(8, v.k * 1.4) }))} title="Наблизити">
           +
         </button>
