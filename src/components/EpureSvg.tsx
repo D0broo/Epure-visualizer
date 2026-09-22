@@ -140,6 +140,8 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 })
   const [cursor, setCursor] = useState<{ x: number; y: number; label: string } | null>(null)
   const drag = useRef<{ px: number; py: number } | null>(null)
+  const pointers = useRef(new Map<number, { x: number; y: number }>())
+  const pinch = useRef<{ dist: number; k: number; tx: number; ty: number } | null>(null)
 
   const layout = useMemo(() => buildLayout(points), [points])
   const { s, sx, sy2, sy1, p3x, c30, axisY, xTicks, zTicks, yTicks } = layout
@@ -263,14 +265,40 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
 
   const onPointerDown = (e: ReactPointerEvent<SVGSVGElement>) => {
     const [x, y] = toSvg(e.clientX, e.clientY)
-    drag.current = { px: x, py: y }
+    pointers.current.set(e.pointerId, { x, y })
     e.currentTarget.setPointerCapture(e.pointerId)
+
+    if (pointers.current.size === 1) {
+      drag.current = { px: x, py: y }
+      pinch.current = null
+    } else if (pointers.current.size === 2) {
+      drag.current = null
+      const [a, b] = [...pointers.current.values()]
+      pinch.current = { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, k: view.k, tx: view.tx, ty: view.ty }
+    }
   }
 
   const onPointerMove = (e: ReactPointerEvent<SVGSVGElement>) => {
     const [x, y] = toSvg(e.clientX, e.clientY)
+    const id = e.pointerId
+    const prev = pointers.current.get(id)
+    if (prev) pointers.current.set(id, { x, y })
+
+    // Пінч (два пальці): масштаб + зсув за середню точку.
+    if (pointers.current.size >= 2 && pinch.current) {
+      const [a, b] = [...pointers.current.values()]
+      const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1
+      const k = Math.min(8, Math.max(0.3, pinch.current.k * (dist / pinch.current.dist)))
+      const mx = (a.x + b.x) / 2
+      const my = (a.y + b.y) / 2
+      const wx = (mx - pinch.current.tx) / pinch.current.k
+      const wy = (my - pinch.current.ty) / pinch.current.k
+      setView({ k, tx: mx - wx * k, ty: my - wy * k })
+      return
+    }
+
     const last = drag.current
-    if (last) {
+    if (last && prev) {
       // Обчислюємо дельту синхронно й лише числа передаємо в оновлювач стану,
       // бо React може викликати його асинхронно — після обнуління drag.current.
       commitPan(x - last.px, y - last.py)
@@ -292,8 +320,16 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
   }
 
   const onPointerUp = (e: ReactPointerEvent<SVGSVGElement>) => {
-    drag.current = null
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+    pointers.current.delete(e.pointerId)
+    if (pointers.current.size === 0) {
+      drag.current = null
+      pinch.current = null
+    } else if (pointers.current.size === 1) {
+      pinch.current = null
+      const [p] = [...pointers.current.values()]
+      drag.current = { px: p.x, py: p.y }
+    }
   }
 
   if (points.length === 0) {
@@ -326,8 +362,10 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
         onPointerLeave={() => {
           drag.current = null
+          pinch.current = null
           setCursor(null)
         }}
       >
