@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { GeoPoint } from './types'
+import type { ReactNode, PointerEvent as ReactPointerEvent } from 'react'
 import { analyzePoints } from './math/epure'
 import { presetById } from './presets'
 import { DataInput, Analytics } from './components/DataInput'
@@ -15,6 +16,11 @@ const TABS: Array<{ id: TabId; label: string; icon: string }> = [
 
 const LS_KEY = 'epure.points.v1'
 const MAX_HISTORY = 60
+
+const SIDE_MIN = 260
+const SIDE_MAX = 820
+const SIDE_DEFAULT = 430
+const SIDE_LS_KEY = 'epure.sideWidth.v1'
 
 const withIds = (list: Array<{ name: string; x: number; y: number; z: number; group?: number }>): GeoPoint[] =>
   list.map((p, i) => ({ group: 0, ...p, id: `p-${i}` }))
@@ -91,7 +97,114 @@ export default function App() {
   const [animate, setAnimate] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
+  const [sideOpen, setSideOpen] = useState(true)
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const [dragging, setDragging] = useState(false)
+  const resizeRef = useRef<{ startX: number; startW: number } | null>(null)
+  const [sideW, setSideW] = useState<number>(() => {
+    const n = Number(localStorage.getItem(SIDE_LS_KEY))
+    return Number.isFinite(n) && n >= SIDE_MIN && n <= SIDE_MAX ? n : SIDE_DEFAULT
+  })
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDE_LS_KEY, String(sideW))
+    } catch {
+      /* ignore */
+    }
+  }, [sideW])
+
+  const startResize = (e: ReactPointerEvent<HTMLDivElement>) => {
+    resizeRef.current = { startX: e.clientX, startW: sideW }
+    setDragging(true)
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+  const moveResize = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const r = resizeRef.current
+    if (!r) return
+    setSideW(Math.min(SIDE_MAX, Math.max(SIDE_MIN, r.startW + (e.clientX - r.startX))))
+  }
+  const endResize = (e: ReactPointerEvent<HTMLDivElement>) => {
+    resizeRef.current = null
+    setDragging(false)
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+  }
+
   const report = useMemo(() => analyzePoints(points), [points])
+
+  // Спільний вміст бокової панелі (десктоп + мобільна завіса).
+  const renderSide = (
+    headerExtra?: ReactNode,
+  ) => (
+    <>
+      <div className="flex items-center justify-between border-b border-slate-300 bg-ink px-4 py-3 text-white">
+        <div>
+          <h1 className="text-sm font-bold uppercase tracking-widest">Епюр Монжа</h1>
+          <p className="text-[11px] text-white/60">Комплексне креслення · нарисна геометрія</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="hidden rounded bg-white/10 px-2 py-1 font-mono text-[10px] text-white/70 min-[420px]:inline">Π₁ / Π₂ / Π₃</span>
+          {headerExtra}
+        </div>
+      </div>
+
+      {/* Інструменти */}
+      <div className="relative flex flex-wrap items-center gap-1 border-b border-slate-300 bg-white px-2 py-1.5">
+        <button className="btn" onClick={undo} disabled={!canUndo} title="Скасувати (Ctrl+Z)">
+          ↩
+        </button>
+        <button className="btn" onClick={redo} disabled={!canRedo} title="Повторити (Ctrl+Y)">
+          ↪
+        </button>
+        <span className="mx-0.5 h-4 w-px bg-slate-300" />
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".csv,text/csv"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            if (f) importCsv(f)
+            e.target.value = ''
+          }}
+        />
+        <button className="btn" onClick={() => fileRef.current?.click()} title="Імпорт CSV">
+          ⬅ CSV
+        </button>
+        <button className="btn" onClick={exportCsv} title="Експорт CSV">
+          CSV ➔
+        </button>
+        <button className="btn" onClick={shareLink} title="Скопіювати посилання з даними">
+          🔗
+        </button>
+        <button
+          className="btn"
+          onClick={() => setPoints(withIds(presetById('polyline6')!.points))}
+          title="Завантажити стандартний пресет"
+        >
+          ⟲ пресет
+        </button>
+        <span className="ml-auto px-1 text-[10px] text-slate-400">
+          {points.length} точок · <span className="font-mono">∑|AB|={report.totalLength === null ? '—' : report.totalLength.toFixed(3)}</span>
+        </span>
+        {flash && (
+          <span className="absolute right-2 top-10 z-20 rounded border border-slate-300 bg-white px-2 py-1 text-[10px] text-sky-700 shadow">
+            {flash}
+          </span>
+        )}
+      </div>
+
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+        <DataInput
+          points={points}
+          onChange={setPoints}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+        />
+        <Analytics report={report} />
+      </div>
+    </>
+  )
 
   // Авто-збереження в localStorage.
   useEffect(() => {
@@ -170,73 +283,47 @@ export default function App() {
   }, [flash])
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden font-sans lg:flex-row">
-      {/* Ліва панель */}
-      <aside className="flex min-h-0 shrink-0 flex-col border-b border-slate-300 bg-slate-50 lg:h-full lg:w-[430px] lg:border-b-0 lg:border-r">
-        <div className="flex items-center justify-between border-b border-slate-300 bg-ink px-4 py-3 text-white">
-          <div>
-            <h1 className="text-sm font-bold uppercase tracking-widest">Епюр Монжа</h1>
-            <p className="text-[11px] text-white/60">Комплексне креслення · нарисна геометрія</p>
-          </div>
-          <span className="rounded bg-white/10 px-2 py-1 font-mono text-[10px] text-white/70">Π₁ / Π₂ / Π₃</span>
-        </div>
-
-        {/* Інструменти */}
-        <div className="relative flex flex-wrap items-center gap-1 border-b border-slate-300 bg-white px-2 py-1.5">
-          <button className="btn" onClick={undo} disabled={!canUndo} title="Скасувати (Ctrl+Z)">
-            ↩
-          </button>
-          <button className="btn" onClick={redo} disabled={!canRedo} title="Повторити (Ctrl+Y)">
-            ↪
-          </button>
-          <span className="mx-0.5 h-4 w-px bg-slate-300" />
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".csv,text/csv"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0]
-              if (f) importCsv(f)
-              e.target.value = ''
-            }}
-          />
-          <button className="btn" onClick={() => fileRef.current?.click()} title="Імпорт CSV">
-            ⬅ CSV
-          </button>
-          <button className="btn" onClick={exportCsv} title="Експорт CSV">
-            CSV ➔
-          </button>
-          <button className="btn" onClick={shareLink} title="Скопіювати посилання з даними">
-            🔗
-          </button>
-          <button
-            className="btn"
-            onClick={() => setPoints(withIds(presetById('polyline6')!.points))}
-            title="Завантажити стандартний пресет"
-          >
-            ⟲ пресет
-          </button>
-          <span className="ml-auto px-1 text-[10px] text-slate-400">
-            {points.length} точок · <span className="font-mono">∑|AB|={report.totalLength === null ? '—' : report.totalLength.toFixed(3)}</span>
-          </span>
-          {flash && (
-            <span className="absolute right-2 top-10 z-20 rounded border border-slate-300 bg-white px-2 py-1 text-[10px] text-sky-700 shadow">
-              {flash}
-            </span>
+    <div className="relative flex h-screen flex-col overflow-hidden font-sans lg:flex-row">
+      {/* Ліва панель · десктоп */}
+      {sideOpen && (
+        <aside
+          className="hidden min-h-0 shrink-0 flex-col bg-slate-50 lg:flex lg:h-full lg:border-r lg:border-slate-300"
+          style={{ width: sideW, transition: dragging ? 'none' : 'width 150ms ease-out', overflow: 'hidden' }}
+        >
+          {renderSide(
+            <button
+              className="rounded bg-white/10 px-2 py-1 text-xs text-white/70 transition hover:bg-white/20 hover:text-white"
+              onClick={() => setSideOpen(false)}
+              title="Згорнути панель"
+            >
+              «
+            </button>,
           )}
-        </div>
+        </aside>
+      )}
 
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
-          <DataInput
-            points={points}
-            onChange={setPoints}
-            selectedId={selectedId}
-            onSelect={setSelectedId}
-          />
-          <Analytics report={report} />
-        </div>
-      </aside>
+      {/* Роздільник для зміни розміру (десктоп) */}
+      {sideOpen && (
+        <div
+          className="hidden w-1.5 shrink-0 cursor-col-resize touch-none select-none bg-slate-300 transition-colors hover:bg-sky-400 active:bg-sky-500 lg:block"
+          onPointerDown={startResize}
+          onPointerMove={moveResize}
+          onPointerUp={endResize}
+          onDoubleClick={() => setSideW(SIDE_DEFAULT)}
+          title="Тягніть, щоб змінити ширину панелі · подвійний клік — скинути"
+        />
+      )}
+
+      {/* Кнопка розгортання, коли панель згорнута (десктоп) */}
+      {!sideOpen && (
+        <button
+          className="absolute left-3 top-3 z-30 hidden items-center gap-1.5 rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow transition hover:border-sky-400 hover:text-sky-700 lg:inline-flex"
+          onClick={() => setSideOpen(true)}
+          title="Показати панель даних"
+        >
+          ☰ Панель
+        </button>
+      )}
 
       {/* Права частина */}
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -278,6 +365,39 @@ export default function App() {
           )}
         </div>
       </main>
+
+      {/* Кнопка відкриття панелі даних (мобільний) */}
+      <button
+        className="fixed bottom-4 right-4 z-40 inline-flex items-center gap-1.5 rounded-full bg-ink px-4 py-2 text-sm font-semibold text-white shadow-xl transition active:scale-95 lg:hidden"
+        onClick={() => setMobileOpen(true)}
+        title="Відкрити панель даних"
+      >
+        ☰ Дані
+      </button>
+
+      {/* Мобільна завіса з введенням даних */}
+      {mobileOpen && (
+        <div className="absolute inset-0 z-50 flex flex-col justify-end lg:hidden">
+          <div
+            className="absolute inset-0 bg-slate-900/50"
+            onClick={() => setMobileOpen(false)}
+          />
+          <div
+            className="relative flex max-h-[88vh] flex-col overflow-hidden rounded-t-2xl bg-slate-50 shadow-2xl"
+            style={{ animation: 'drawer-up 180ms ease-out' }}
+          >
+            {renderSide(
+              <button
+                className="rounded bg-white/10 px-2 py-1 text-xs text-white/70 transition hover:bg-white/20 hover:text-white"
+                onClick={() => setMobileOpen(false)}
+                title="Закрити панель"
+              >
+                ✕
+              </button>,
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
