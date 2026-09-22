@@ -313,14 +313,16 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
   const groupTransform = `translate(${view.tx} ${view.ty}) scale(${view.k})`
 
   return (
-    <div className="relative h-full w-full overflow-hidden">
+    <div className="relative h-full w-full select-none overflow-hidden">
       <svg
         ref={svgRef}
         viewBox={`0 0 ${W} ${H}`}
-        className="h-full w-full touch-none"
+        className="h-full w-full touch-none select-none"
+        style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
         preserveAspectRatio="xMidYMid meet"
         role="img"
         aria-label="Епюр Монжа — комплексне креслення"
+        onDragStart={(e) => e.preventDefault()}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}

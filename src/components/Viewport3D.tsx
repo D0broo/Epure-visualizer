@@ -435,7 +435,11 @@ export function Viewport3D({ points, selectedId = null, onSelect, animate = fals
   }, [animate, points])
 
   return (
-    <div className="relative h-full w-full" ref={containerRef}>
+    <div
+      className="relative h-full w-full select-none"
+      style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+      ref={containerRef}
+    >
       <div className="pointer-events-none absolute left-2 top-2 select-none rounded bg-white/70 px-2 py-1 font-mono text-[11px] text-slate-600 shadow-sm">
         Тягніть — обертання · колесо — масштаб · клік — вибір точки (Π₁ зел., Π₂ син., Π₃ жовт.)
       </div>
