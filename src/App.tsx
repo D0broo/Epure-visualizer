@@ -6,6 +6,7 @@ import { presetById } from './presets'
 import { DataInput, Analytics } from './components/DataInput'
 import { EpureSvg } from './components/EpureSvg'
 import { Viewport3D } from './components/Viewport3D'
+import { APP_VERSION } from './version'
 
 type TabId = 'epure' | '3d'
 
@@ -202,6 +203,13 @@ export default function App() {
           onSelect={setSelectedId}
         />
         <Analytics report={report} />
+      </div>
+
+      <div className="flex items-center justify-between border-t border-slate-300 bg-slate-100/70 px-3 py-1 font-mono text-[10px] text-slate-400">
+        <span>Сліди та їх побудова — кнопка «?»</span>
+        <span className="shrink-0" title="Версія програми">
+          версія {APP_VERSION}
+        </span>
       </div>
     </>
   )

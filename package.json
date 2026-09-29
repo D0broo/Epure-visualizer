@@ -1,7 +1,7 @@
 {
   "name": "epure-visualizer",
   "private": true,
-  "version": "1.0.5",
+  "version": "1.0.5.1",
   "type": "module",
   "description": "Інтерактивна візуалізація задач нарисної геометрії (епюр Монжа) за 3D-координатами",
   "scripts": {
