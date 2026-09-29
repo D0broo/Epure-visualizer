@@ -23,6 +23,12 @@ const SIDE_MAX = 820
 const SIDE_DEFAULT = 430
 const SIDE_LS_KEY = 'epure.sideWidth.v1'
 
+// Нижче цієї ширини панелі розкладка вживається (див. .btn-row в index.css):
+// ряд кнопок переходить з трьох колонок в одну, бо на звуженій панелі три
+// підписи в один ряд уже не вміщаються. Ширина панелі задається користувачем
+// і не залежить від ширини екрана, тому медіазапити вьюпорта тут не підходять.
+const SIDE_TIGHT = 320
+
 const withIds = (list: Array<{ name: string; x: number; y: number; z: number; group?: number }>): GeoPoint[] =>
   list.map((p, i) => ({ group: 0, ...p, id: `p-${i}` }))
 
@@ -157,7 +163,7 @@ export default function App() {
         <button className="btn" onClick={redo} disabled={!canRedo} title="Повторити (Ctrl+Y)">
           ↪
         </button>
-        <span className="mx-0.5 h-4 w-px bg-slate-300" />
+        <span className="rule-v mx-0.5 h-4 w-px bg-slate-300" />
         <input
           ref={fileRef}
           type="file"
@@ -195,7 +201,10 @@ export default function App() {
         )}
       </div>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+      <div
+        data-w={sideW < SIDE_TIGHT ? 'tight' : 'wide'}
+        className="min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden p-3"
+      >
         <DataInput
           points={points}
           onChange={setPoints}

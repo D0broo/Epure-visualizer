@@ -89,9 +89,9 @@ export function DataInput({ points, onChange, selectedId = null, onSelect }: Dat
         <span className="font-mono text-[10px] normal-case text-slate-400">{points.length} шт.</span>
       </div>
 
-      <div className="flex items-center gap-2 border-b border-slate-200 px-3 py-2">
+      <div className="space-y-1.5 border-b border-slate-200 px-3 py-2">
         <select
-          className="flex-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 outline-none focus:border-sky-500"
+          className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 outline-none focus:border-sky-500"
           value={presetId}
           onChange={(e) => applyPreset(e.target.value as PresetId)}
           aria-label="Пресет"
@@ -102,15 +102,17 @@ export function DataInput({ points, onChange, selectedId = null, onSelect }: Dat
             </option>
           ))}
         </select>
-        <button className="btn" onClick={() => addPoint()} title="Додати точку до поточної прямої">
-          + Точка
-        </button>
-        <button className="btn" onClick={() => addPoint(nextFreeGroup)} title="Почати нову пряму (новий колір)">
-          + Пряма
-        </button>
-        <button className="btn" onClick={() => onChange([])} title="Очистити всі точки">
-          Очистити
-        </button>
+        <div className="btn-row">
+          <button className="btn" onClick={() => addPoint()} title="Додати точку до поточної прямої">
+            + Точка
+          </button>
+          <button className="btn" onClick={() => addPoint(nextFreeGroup)} title="Почати нову пряму (новий колір)">
+            + Пряма
+          </button>
+          <button className="btn" onClick={() => onChange([])} title="Очистити всі точки">
+            Очистити
+          </button>
+        </div>
       </div>
 
       {points.length === 0 ? (
@@ -119,15 +121,27 @@ export function DataInput({ points, onChange, selectedId = null, onSelect }: Dat
         </p>
       ) : (
         <div className="max-h-72 overflow-y-auto">
-          <table className="w-full text-xs">
+          <table className="w-full table-fixed text-xs">
+            {/*
+              Пропорційні колонки + table-fixed: інакше таблиця тримає мінімальну
+              ширину за вмістом полів введення і виходить за межі звуженої панелі.
+            */}
+            <colgroup>
+              <col style={{ width: '18%' }} />
+              <col span={3} style={{ width: '20%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '12%' }} />
+            </colgroup>
             <thead className="sticky top-0 bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
               <tr>
-                <th className="px-2 py-1.5 text-left">Ім'я</th>
+                <th className="truncate px-2 py-1.5 text-left">Ім'я</th>
                 <th className="px-1 py-1.5 text-center">X</th>
                 <th className="px-1 py-1.5 text-center">Y</th>
                 <th className="px-1 py-1.5 text-center">Z</th>
-                <th className="px-1 py-1.5 text-center">Пряма</th>
-                <th className="px-2 py-1.5 w-8" />
+                <th className="truncate px-1 py-1.5 text-center" title="Номер прямої (колір точки)">
+                  Пряма
+                </th>
+                <th className="px-1 py-1.5" />
               </tr>
             </thead>
             <tbody>
@@ -141,7 +155,7 @@ export function DataInput({ points, onChange, selectedId = null, onSelect }: Dat
                 >
                   <td className="px-2 py-1">
                     <input
-                      className="w-12 rounded border border-slate-300 bg-white px-1 py-0.5 font-mono text-xs font-bold text-ink outline-none focus:border-sky-500"
+                      className="w-full rounded border border-slate-300 bg-white px-1 py-0.5 font-mono text-xs font-bold text-ink outline-none focus:border-sky-500"
                       value={p.name}
                       onChange={(e) => update(p.id, 'name', e.target.value.slice(0, 2))}
                       aria-label="ім'я точки"
@@ -187,9 +201,9 @@ export function DataInput({ points, onChange, selectedId = null, onSelect }: Dat
       <div className="panel-title">
         <span>Генератор випадкової прямої</span>
       </div>
-      <div className="flex items-center gap-2 px-3 py-2">
+      <div className="space-y-1.5 px-3 py-2">
         <select
-          className="flex-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 outline-none focus:border-sky-500"
+          className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 outline-none focus:border-sky-500"
           value={lineType}
           onChange={(e) => setLineType(e.target.value as SegmentPosition)}
           aria-label="Тип прямої"
@@ -201,7 +215,7 @@ export function DataInput({ points, onChange, selectedId = null, onSelect }: Dat
           ))}
         </select>
         <button
-          className="btn"
+          className="btn w-full"
           onClick={() => {
             const group = points.reduce((m, p) => Math.max(m, p.group), -1) + 1
             onChange([...points, ...generateLine(lineType, points, group)])
