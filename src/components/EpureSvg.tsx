@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
-import type { GeoPoint } from '../types'
-import { computeBounds, fmt, niceStep, tracesOfLine } from '../math/epure'
+import type { GeoPoint, TraceCalc } from '../types'
+import { computeBounds, fmt, niceStep, traceCalcs } from '../math/epure'
 import { groupColor } from '../palette'
 
 const C = {
@@ -32,6 +32,10 @@ interface ViewOpts {
   p3: boolean
   bisector: boolean
   traces: boolean
+  /** Показувати параметр t біля кожного сліду. */
+  traceCalc: boolean
+  /** Форма позначення точок на площинах. */
+  mark: MarkKind
 }
 
 const DEFAULT_OPTS: ViewOpts = {
@@ -42,6 +46,8 @@ const DEFAULT_OPTS: ViewOpts = {
   p3: true,
   bisector: true,
   traces: true,
+  traceCalc: false,
+  mark: 'disc',
 }
 
 const W = 1500
@@ -135,6 +141,66 @@ function perp(x1: number, y1: number, x2: number, y2: number): [number, number] 
   return [-dy / len, dx / len]
 }
 
+/** Рядки пояснення для спливаючої підказки біля сліду. */
+function traceTipLines(c: TraceCalc, a: GeoPoint, b: GeoPoint): string[] {
+  const ax = c.zeroCoord.toUpperCase()
+  const head = `${c.label} — слід ${a.name}${b.name}, ${c.planeLabel}`
+  const tr = c.trace
+  if (!tr) return [head, `Δ${ax} = ${fmt(c.delta)}`, c.note]
+  return [
+    head,
+    `${ax}: ${fmt(a[c.zeroCoord])} → ${fmt(b[c.zeroCoord])}   Δ${ax} = ${fmt(c.delta)}`,
+    `t = −${fmt(c.a0)} / ${fmt(c.delta)} = ${fmt(tr.t, 4)}`,
+    `${c.label} = (${fmt(tr.x)}; ${fmt(tr.y)}; ${fmt(tr.z)})`,
+    c.note,
+  ]
+}
+
+/**
+ * Спливаючка з поясненням біля сліду. Малюється у масштабі, компенсованому
+ * зуму (див. k), щоб не розростатися при наближенні й не зникати при віддаленні.
+ */
+function TraceTip({ x, y, k, lines }: { x: number; y: number; k: number; lines: string[] }) {
+  const w = 330
+  const h = lines.length * 13 + 16
+  const px = x + 18 + w > W - mR ? x - 18 - w : x + 18
+  const py = Math.min(Math.max(y - h / 2, mT), Math.max(mT, H - mB - h))
+  return (
+    <g pointerEvents="none" transform={`translate(${px} ${py}) scale(${1 / k}) translate(${-px} ${-py})`}>
+      <rect x={px} y={py} width={w} height={h} rx={4} fill="#ffffff" stroke={C.select} strokeWidth={1} opacity={0.97} />
+      {lines.map((ln, i) => (
+        <text key={i} x={px + 8} y={py + 15 + i * 13} fontSize={10} fontFamily="monospace" fill={C.ink}>
+          {ln}
+        </text>
+      ))}
+    </g>
+  )
+}
+
+/** Підсвітка відрізка на всіх трьох проєкціях — щоб було видно, звідки взяв слід. */
+function SegmentHighlight({
+  a,
+  b,
+  showP3,
+  layout,
+}: {
+  a: GeoPoint
+  b: GeoPoint
+  showP3: boolean
+  layout: Layout
+}) {
+  const { sx, sy1, sy2, p3x } = layout
+  return (
+    <g pointerEvents="none">
+      <line x1={sx(a.x)} y1={sy2(a.z)} x2={sx(b.x)} y2={sy2(b.z)} stroke={C.select} strokeWidth={3.4} strokeLinecap="round" />
+      <line x1={sx(a.x)} y1={sy1(a.y)} x2={sx(b.x)} y2={sy1(b.y)} stroke={C.select} strokeWidth={3.4} strokeLinecap="round" />
+      {showP3 && (
+        <line x1={p3x(a.y)} y1={sy2(a.z)} x2={p3x(b.y)} y2={sy2(b.z)} stroke={C.select} strokeWidth={2.6} strokeLinecap="round" />
+      )}
+    </g>
+  )
+}
+
 export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [opts, setOpts] = useState<ViewOpts>(DEFAULT_OPTS)
@@ -142,6 +208,8 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
   const viewRef = useRef(view)
   viewRef.current = view
   const [cursor, setCursor] = useState<{ x: number; y: number; label: string } | null>(null)
+  /** Який слід зараз наведено: індекс відрізка та індекс розрахунку в ньому. */
+  const [hoverTr, setHoverTr] = useState<{ seg: number; j: number } | null>(null)
   const drag = useRef<{ px: number; py: number } | null>(null)
   const pinch = useRef<{ dist: number; k: number; tx: number; ty: number } | null>(null)
   const lastTap = useRef<{ t: number; x: number; y: number } | null>(null)
@@ -159,6 +227,8 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
     for (let i = 0; i < points.length - 1; i++) {
       const a = points[i]
       const b = points[i + 1]
+      // Відрізок існує лише між сусідніми точками однієї групи.
+      if (a.group !== b.group) continue
       const col = groupColor(a.group)
       const len = (v: number) => (v > 1e-6 ? fmt(v, 2) : '0')
 
@@ -202,9 +272,12 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [points, s, c30])
 
-  const traces = useMemo(
-    () => (opts.traces ? points.slice(0, -1).map((p, i) => tracesOfLine(p, points[i + 1])) : points.slice(0, -1).map(() => [])),
-    [points, opts.traces],
+  // Повний розрахунок слідів по кожному відрізку (включно з випадками, коли сліду немає).
+  // Відрізок існує лише між сусідніми точками однієї групи — так само, як в аналітиці.
+  const calcs = useMemo<TraceCalc[][]>(
+    () =>
+      points.slice(0, -1).map((p, i) => (p.group === points[i + 1].group ? traceCalcs(p, points[i + 1]) : [])),
+    [points],
   )
 
   // Розбиваємо точки на послідовні групи (прямі одного кольору).
@@ -442,6 +515,7 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
           drag.current = null
           pinch.current = null
           setCursor(null)
+          setHoverTr(null)
         }}
       >
         <g transform={groupTransform}>
@@ -616,21 +690,73 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
             </>
           )}
 
-          {/* Сліди прямих */}
-          {traces.flatMap((trs, i) =>
-            trs.map((tr, j) => {
-              const draw = tr.plane === 'П1' ? { x: sx(tr.x), y: sy1(tr.y) } : tr.plane === 'П2' ? { x: sx(tr.x), y: sy2(tr.z) } : { x: p3x(tr.y), y: sy2(tr.z) }
-              const mark = tr.plane === 'П1' ? 'M₁' : tr.plane === 'П2' ? 'N₂' : 'K₃'
-              return (
-                <g key={`tr-${i}-${j}`}>
-                  <rect x={draw.x - 3} y={draw.y - 3} width={6} height={6} fill="none" stroke={C.trace} strokeWidth={1} strokeDasharray="2 1.5" />
-                  <text x={Math.min(draw.x + 5, W - mR - 24)} y={draw.y - 4} fontSize={10} fill={C.trace} fontFamily="monospace" fontStyle="italic">
-                    {mark}
-                  </text>
-                </g>
-              )
-            }),
+          {/* Підсвітка відрізка, який пояснюється наведеним слідом */}
+          {opts.traces && hoverTr && calcs[hoverTr.seg]?.[hoverTr.j]?.trace && (
+            <SegmentHighlight a={points[hoverTr.seg]} b={points[hoverTr.seg + 1]} showP3={opts.p3} layout={layout} />
           )}
+
+          {/* Сліди прямих */}
+          {opts.traces &&
+            calcs.flatMap((cs, i) =>
+              cs.map((c, j) => {
+                const tr = c.trace
+                if (!tr) return null
+                const draw =
+                  tr.plane === 'П1'
+                    ? { x: sx(tr.x), y: sy1(tr.y) }
+                    : tr.plane === 'П2'
+                      ? { x: sx(tr.x), y: sy2(tr.z) }
+                      : { x: p3x(tr.y), y: sy2(tr.z) }
+                const hot = hoverTr?.seg === i && hoverTr?.j === j
+                const a = points[i]
+                const b = points[i + 1]
+                return (
+                  <g
+                    key={`tr-${i}-${j}`}
+                    onMouseEnter={() => setHoverTr({ seg: i, j })}
+                    onMouseLeave={() => setHoverTr(null)}
+                    style={{ cursor: 'help' }}
+                  >
+                    {/* Невидима зона наведення — щоб було легко націлитися дрібний штриховий квадратик. */}
+                    <rect x={draw.x - 10} y={draw.y - 10} width={20} height={20} fill="transparent" />
+                    <rect
+                      x={draw.x - 3}
+                      y={draw.y - 3}
+                      width={6}
+                      height={6}
+                      fill="none"
+                      stroke={hot ? C.select : C.trace}
+                      strokeWidth={hot ? 1.7 : 1}
+                      strokeDasharray="2 1.5"
+                    />
+                    <text
+                      x={Math.min(draw.x + 5, W - mR - 24)}
+                      y={draw.y - 4}
+                      fontSize={10}
+                      fill={hot ? C.select : C.trace}
+                      fontFamily="monospace"
+                      fontStyle="italic"
+                    >
+                      {c.label}
+                    </text>
+                    {opts.traceCalc && (
+                      <text
+                        x={Math.min(draw.x + 5, W - mR - 24)}
+                        y={draw.y + 8}
+                        fontSize={9}
+                        fill={C.trace}
+                        fontFamily="monospace"
+                        opacity={0.85}
+                      >
+                        t={fmt(tr.t, 3)}
+                      </text>
+                    )}
+                    {hot && <TraceTip x={draw.x} y={draw.y} k={view.k} lines={traceTipLines(c, a, b)} />}
+                    <title>{`${c.label} · слід прямої ${a.name}${b.name} на ${c.planeLabel}\nt = −${c.zeroCoord.toUpperCase()}_${a.name} / (${c.zeroCoord.toUpperCase()}_${b.name} − ${c.zeroCoord.toUpperCase()}_${a.name}) = ${fmt(tr.t, 4)}\n(${fmt(tr.x)}; ${fmt(tr.y)}; ${fmt(tr.z)})\n${c.note}`}</title>
+                  </g>
+                )
+              }),
+            )}
 
           {/* Розмірні лінії */}
           {opts.dims && (
@@ -692,6 +818,7 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
               label={`${p.name}₂`}
               lx={6}
               ly={-4}
+              kind={opts.mark}
               title={`${p.name}₂ · X=${fmt(p.x)} Z=${fmt(p.z)}`}
               selected={selectedId === p.id}
               onSelect={() => onSelect?.(selectedId === p.id ? null : p.id)}
@@ -707,6 +834,7 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
               label={`${p.name}₁`}
               lx={6}
               ly={13}
+              kind={opts.mark}
               title={`${p.name}₁ · X=${fmt(p.x)} Y=${fmt(p.y)}`}
               selected={selectedId === p.id}
               onSelect={() => onSelect?.(selectedId === p.id ? null : p.id)}
@@ -723,6 +851,7 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
                 label={`${p.name}₃`}
                 lx={6}
                 ly={-4}
+                kind={opts.mark}
                 title={`${p.name}₃ · Y=${fmt(p.y)} Z=${fmt(p.z)}`}
                 selected={selectedId === p.id}
                 onSelect={() => onSelect?.(selectedId === p.id ? null : p.id)}
@@ -740,14 +869,31 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
       </svg>
 
       {/* Панель вигляду */}
-      <div className="pointer-events-none absolute left-2 top-2 z-10 flex max-w-[430px] flex-wrap items-center gap-x-3 gap-y-1 rounded border border-slate-300 bg-white/85 px-2 py-1.5 font-mono text-[10px] text-slate-600 shadow-sm backdrop-blur">
-        <Toggle label="сітка" on={opts.grid} set={(v) => setOpts((o) => ({ ...o, grid: v }))} />
-        <Toggle label="Π₃" on={opts.p3} set={(v) => setOpts((o) => ({ ...o, p3: v }))} />
-        <Toggle label="зв'язок" on={opts.links} set={(v) => setOpts((o) => ({ ...o, links: v }))} />
-        <Toggle label="45°" on={opts.bisector} set={(v) => setOpts((o) => ({ ...o, bisector: v }))} />
-        <Toggle label="розміри" on={opts.dims} set={(v) => setOpts((o) => ({ ...o, dims: v }))} />
-        <Toggle label="координати" on={opts.coords} set={(v) => setOpts((o) => ({ ...o, coords: v }))} />
-        <Toggle label="сліди" on={opts.traces} set={(v) => setOpts((o) => ({ ...o, traces: v }))} />
+      <div className="pointer-events-none absolute left-2 top-2 z-10 flex max-w-[430px] flex-col gap-1 rounded border border-slate-300 bg-white/85 px-2 py-1.5 font-mono text-[10px] text-slate-600 shadow-sm backdrop-blur">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <Toggle label="сітка" on={opts.grid} set={(v) => setOpts((o) => ({ ...o, grid: v }))} />
+          <Toggle label="Π₃" on={opts.p3} set={(v) => setOpts((o) => ({ ...o, p3: v }))} />
+          <Toggle label="зв'язок" on={opts.links} set={(v) => setOpts((o) => ({ ...o, links: v }))} />
+          <Toggle label="45°" on={opts.bisector} set={(v) => setOpts((o) => ({ ...o, bisector: v }))} />
+          <Toggle label="розміри" on={opts.dims} set={(v) => setOpts((o) => ({ ...o, dims: v }))} />
+          <Toggle label="координати" on={opts.coords} set={(v) => setOpts((o) => ({ ...o, coords: v }))} />
+          <Toggle label="сліди" on={opts.traces} set={(v) => setOpts((o) => ({ ...o, traces: v }))} />
+          <Toggle label="параметр t" on={opts.traceCalc} set={(v) => setOpts((o) => ({ ...o, traceCalc: v }))} />
+        </div>
+        <label className="pointer-events-auto flex items-center gap-1 border-t border-slate-200 pt-1">
+          позначка
+          <select
+            value={opts.mark}
+            onChange={(e) => setOpts((o) => ({ ...o, mark: e.target.value as MarkKind }))}
+            className="rounded border border-slate-300 bg-white px-1 py-0.5 font-mono text-[10px] text-slate-700 outline-none focus:border-sky-500"
+          >
+            {MARK_OPTIONS.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       {/* Масштаб */}
@@ -807,6 +953,44 @@ export function EpureSvg({ points, selectedId = null, onSelect }: EpureSvgProps)
   )
 }
 
+/** Форма позначення точки на епюрі — узгоджена з 3D-сценою. */
+type MarkKind = 'disc' | 'cross' | 'xmark' | 'square' | 'ring'
+
+const MARK_OPTIONS: Array<{ id: MarkKind; label: string }> = [
+  { id: 'disc', label: 'крапка' },
+  { id: 'cross', label: 'хрест +' },
+  { id: 'xmark', label: 'хрест ✕' },
+  { id: 'square', label: 'рамка' },
+  { id: 'ring', label: 'кільце' },
+]
+
+/** Сама фігура позначення (без підпису й рамки вибору). */
+function MarkShape({ kind, x, y, r, color, selected }: { kind: MarkKind; x: number; y: number; r: number; color: string; selected: boolean }) {
+  const w = selected ? 2.2 : 1.6
+  switch (kind) {
+    case 'cross':
+      return (
+        <g stroke={color} strokeWidth={w} strokeLinecap="round">
+          <line x1={x - r} y1={y} x2={x + r} y2={y} />
+          <line x1={x} y1={y - r} x2={x} y2={y + r} />
+        </g>
+      )
+    case 'xmark':
+      return (
+        <g stroke={color} strokeWidth={w} strokeLinecap="round">
+          <line x1={x - r} y1={y - r} x2={x + r} y2={y + r} />
+          <line x1={x - r} y1={y + r} x2={x + r} y2={y - r} />
+        </g>
+      )
+    case 'square':
+      return <rect x={x - r} y={y - r} width={r * 2} height={r * 2} fill="none" stroke={color} strokeWidth={w} />
+    case 'ring':
+      return <circle cx={x} cy={y} r={r} fill="none" stroke={color} strokeWidth={w} />
+    default:
+      return <circle cx={x} cy={y} r={r} fill={color} stroke="#fff" strokeWidth={1.4} />
+  }
+}
+
 function PointMark({
   x,
   y,
@@ -817,6 +1001,7 @@ function PointMark({
   title,
   selected,
   onSelect,
+  kind,
 }: {
   x: number
   y: number
@@ -827,11 +1012,12 @@ function PointMark({
   title: string
   selected: boolean
   onSelect: () => void
+  kind: MarkKind
 }) {
   return (
     <g style={{ cursor: 'pointer' }} onClick={onSelect}>
-      <circle cx={x} cy={y} r={selected ? 5.5 : 3.4} fill={color} stroke="#fff" strokeWidth={1.4} />
-      <circle cx={x} cy={y} r={selected ? 7.5 : 0} fill="none" stroke={C.select} strokeWidth={0.8} strokeDasharray="2 1.5" />
+      <MarkShape kind={kind} x={x} y={y} r={selected ? 5 : 3.4} color={color} selected={selected} />
+      <circle cx={x} cy={y} r={selected ? 8 : 0} fill="none" stroke={C.select} strokeWidth={0.8} strokeDasharray="2 1.5" />
       <text x={x + lx} y={y + ly} fontSize={11} fill={color} fontFamily="monospace" fontWeight={700}>
         {label}
       </text>

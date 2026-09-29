@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { GeoPoint } from '../types'
-import { fmt, niceStep } from '../math/epure'
+import { fmt, niceStep, tracesOfLine } from '../math/epure'
 import { groupColor } from '../palette'
 
 type PlaneId = 'p1' | 'p2' | 'p3'
@@ -37,6 +37,13 @@ const PLANE_CSS: Record<PlaneId, string> = { p1: '#16a34a', p2: '#2563eb', p3: '
    ──────────────────────────────────────────────────────────────────── */
 const toThree = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(y, z, x)
 
+/** Мінімальний набір координат — достатньо і для GeoPoint, і для точки сліду. */
+interface XYZ {
+  x: number
+  y: number
+  z: number
+}
+
 interface PlaneSpec {
   id: PlaneId
   /** Підпис сліду: A₁, A₂, A₃. */
@@ -45,7 +52,7 @@ interface PlaneSpec {
   title: string
   color: number
   /** Проєкція геометричної точки в координати three (без зсуву від площини). */
-  proj: (p: GeoPoint) => [number, number, number]
+  proj: (p: XYZ) => [number, number, number]
   /** Одинична нормаль площини в three. */
   n: [number, number, number]
   /** Поворот фігур, які мають лежати в площині (нормаль локально +Z). */
@@ -90,8 +97,12 @@ const PLANES: PlaneSpec[] = [
   },
 ]
 
+/** Відповідність позначень math/epure.ts ('П1'|'П2'|'П3') на ідентифікатори площини. */
+const PLANE_BY_NAME: Record<'П1' | 'П2' | 'П3', PlaneId> = { 'П1': 'p1', 'П2': 'p2', 'П3': 'p3' }
+const planeOf = (id: PlaneId): PlaneSpec => PLANES.find((p) => p.id === id)!
+
 /** Проєкція точки на площину зі зсувом `off` уздовж нормалі (щоб не злипалось із площиною). */
-function project(pl: PlaneSpec, p: GeoPoint, off: number): THREE.Vector3 {
+function project(pl: PlaneSpec, p: XYZ, off: number): THREE.Vector3 {
   const [a, b, c] = pl.proj(p)
   return new THREE.Vector3(a + pl.n[0] * off, b + pl.n[1] * off, c + pl.n[2] * off)
 }
@@ -216,6 +227,8 @@ interface ViewOpts {
   links: boolean
   /** Підписи точок. */
   labels: boolean
+  /** Сліди прямих (точки перетину з площинами) на 2D. */
+  traces: boolean
   ticks: boolean
   /** Позначення точок у просторі. */
   spaceMarker: ShapeKind
@@ -234,6 +247,7 @@ const DEFAULT_OPTS: ViewOpts = {
   poly: true,
   links: true,
   labels: true,
+  traces: true,
   ticks: true,
   spaceMarker: 'sphere',
   planeMarker: 'disc',
@@ -543,6 +557,33 @@ function rebuildData(st: SceneState, points: GeoPoint[], selectedId: string | nu
     aux.add(l)
   }
 
+  // Сліди прямих: точки перетину прямої з площинами (M₁, N₂, K₃).
+  // Рахуються ті самі, що й у 2D, але кожен кладеться на СВОЮ площину.
+  if (opts.traces) {
+    const mkTrace = ext.ext * 0.03
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i]
+      const b = points[i + 1]
+      if (a.group !== b.group) continue
+      for (const tr of tracesOfLine(a, b)) {
+        const pl = planeOf(PLANE_BY_NAME[tr.plane])
+        const at = project(pl, tr, off)
+        const col = groupColor(a.group)
+
+        const m = buildMarker('square', col, mkTrace, pl)
+        m.position.copy(at)
+        st.planeItems[pl.id].add(m)
+
+        if (opts.labels) {
+          const k = labelScale * 0.62
+          const l = makeTextSprite(tr.label, tr.onSegment ? col : COLORS.gray, k)
+          l.position.copy(at).add(new THREE.Vector3(pl.labOff[0] * k * 1.6, pl.labOff[1] * k * 1.6, pl.labOff[2] * k * 1.6))
+          st.planeItems[pl.id].add(l)
+        }
+      }
+    }
+  }
+
   for (const p of points) {
     const space = toThree(p.x, p.y, p.z)
     const isSel = selectedId === p.id
@@ -822,6 +863,7 @@ export function Viewport3D({ points, selectedId = null, onSelect, animate = fals
           <Toggle label="зв'язок" on={opts.links} set={(v) => patch({ links: v })} />
           <Toggle label="полілінії" on={opts.poly} set={(v) => patch({ poly: v })} />
           <Toggle label="підписи" on={opts.labels} set={(v) => patch({ labels: v })} />
+          <Toggle label="сліди" on={opts.traces} set={(v) => patch({ traces: v })} />
           <Toggle label="засічки" on={opts.ticks} set={(v) => patch({ ticks: v })} />
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-200 pt-1">

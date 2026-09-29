@@ -7,6 +7,7 @@ import type {
   PlaneMembership,
   SegmentAnalysis,
   SegmentPosition,
+  TraceCalc,
 } from '../types'
 
 /** Допустима відносна похибка порівняння з нулем. */
@@ -64,37 +65,106 @@ export function classifySegment(dx: number, dy: number, dz: number): { position:
 }
 
 /**
- * Сліди прямої: точки перетину прямої A→B із площинами проєкцій.
- * Пряма задана параметрично P(t) = A + t·(B−A). Площина Π1 відповідає z=0,
- * Π2 — y=0, Π3 — x=0.
+ * Правила побудови слідів: яка координата обнуляється, за якою формулою
+ * рахується параметр t і як позначається слід. Єдине джерело правди і для
+ * математики, і для текстових пояснень в інтерфейсі.
  */
-export function tracesOfLine(a: GeoPoint, b: GeoPoint): LineTrace[] {
-  const out: LineTrace[] = []
-  const cases: Array<{ plane: 'П1' | 'П2' | 'П3'; zeroCoord: 'x' | 'y' | 'z'; delta: number; a0: number; mark: string }> = [
-    { plane: 'П1', zeroCoord: 'z', delta: b.z - a.z, a0: a.z, mark: 'M' },
-    { plane: 'П2', zeroCoord: 'y', delta: b.y - a.y, a0: a.y, mark: 'N' },
-    { plane: 'П3', zeroCoord: 'x', delta: b.x - a.x, a0: a.x, mark: 'K' },
-  ]
+export const TRACE_RULES: ReadonlyArray<{
+  plane: 'П1' | 'П2' | 'П3'
+  zeroCoord: 'x' | 'y' | 'z'
+  label: string
+  planeLabel: string
+  cond: string
+  tFormula: string
+}> = [
+  {
+    plane: 'П1',
+    zeroCoord: 'z',
+    label: 'M₁',
+    planeLabel: 'Π₁ · горизонтальна (X, Y)',
+    cond: 'z = 0',
+    tFormula: '−z_A / (z_B − z_A)',
+  },
+  {
+    plane: 'П2',
+    zeroCoord: 'y',
+    label: 'N₂',
+    planeLabel: 'Π₂ · фронтальна (X, Z)',
+    cond: 'y = 0',
+    tFormula: '−y_A / (y_B − y_A)',
+  },
+  {
+    plane: 'П3',
+    zeroCoord: 'x',
+    label: 'K₃',
+    planeLabel: 'Π₃ · профільна (Y, Z)',
+    cond: 'x = 0',
+    tFormula: '−x_A / (x_B − x_A)',
+  },
+]
 
-  for (const c of cases) {
-    if (approxZero(c.delta)) continue
-    const t = -c.a0 / c.delta
-    const x = a.x + t * (b.x - a.x)
-    const y = a.y + t * (b.y - a.y)
-    const z = a.z + t * (b.z - a.z)
-    out.push({
+/**
+ * Покроковий розрахунок слідів прямої A→B по всіх трьох площинах.
+ *
+ * Пряма задана параметрично P(t) = A + t·(B − A). Слід на площині — це те
+ * значення t, за якого координата площини дорівнює 0: t = −a₀ / Δ.
+ *
+ * На відміну від {@link tracesOfLine}, повертає записи і для випадків, коли
+ * сліду немає (t = null), щоб можна було показати, чому він відсутній.
+ */
+export function traceCalcs(a: GeoPoint, b: GeoPoint): TraceCalc[] {
+  const degenerate = approxZero(b.x - a.x) && approxZero(b.y - a.y) && approxZero(b.z - a.z)
+  const upper = (c: 'x' | 'y' | 'z') => c.toUpperCase()
+
+  return TRACE_RULES.map((c) => {
+    const a0 = a[c.zeroCoord]
+    const delta = b[c.zeroCoord] - a0
+    const base = { plane: c.plane, planeLabel: c.planeLabel, label: c.label, zeroCoord: c.zeroCoord, a0, delta }
+
+    if (approxZero(delta)) {
+      const note = degenerate
+        ? `відрізок вироджений (${a.name} = ${b.name}) — прямої немає`
+        : approxZero(a0)
+          ? `${a.name} лежить у площині, тож вся пряма лежить у ній — слідом є вся пряма, а не точка`
+          : `${upper(c.zeroCoord)}: ${fmt(a0)} = ${fmt(b[c.zeroCoord])}, тому Δ = 0 — пряма ∥ площині й не перетинає її (слід нескінченно віддалений)`
+      return { ...base, t: null, trace: null, note }
+    }
+
+    const t = -a0 / delta
+    const trace: LineTrace = {
       plane: c.plane,
       zeroCoord: c.zeroCoord,
       t,
       onSegment: t >= 0 && t <= 1,
-      x,
-      y,
-      z,
-      label: `${c.mark}${c.plane === 'П1' ? '₁' : c.plane === 'П2' ? '₂' : '₃'}`,
-    })
-  }
+      x: a.x + t * (b.x - a.x),
+      y: a.y + t * (b.y - a.y),
+      z: a.z + t * (b.z - a.z),
+      label: c.label,
+    }
 
-  return out
+    const note = !trace.onSegment
+      ? t < 0
+        ? `t < 0 — слід лежить на прямій за точкою ${a.name}`
+        : `t > 1 — слід лежить на прямій за точкою ${b.name}`
+      : approxZero(t)
+        ? `t = 0 — слід збігається з точкою ${a.name}`
+        : approxZero(t - 1)
+          ? `t = 1 — слід збігається з точкою ${b.name}`
+          : 'слід усередині відрізка'
+
+    return { ...base, t, trace, note }
+  })
+}
+
+/**
+ * Сліди прямої: точки перетину прямої A→B із площинами проєкцій.
+ * Площина Π1 відповідає z=0, Π2 — y=0, Π3 — x=0.
+ * Прямі, паралельні площині, слідів не мають — такі записи відкидаються.
+ */
+export function tracesOfLine(a: GeoPoint, b: GeoPoint): LineTrace[] {
+  return traceCalcs(a, b)
+    .map((c) => c.trace)
+    .filter((tr): tr is LineTrace => tr !== null)
 }
 
 /** Аналітичний опис одного відрізка. */

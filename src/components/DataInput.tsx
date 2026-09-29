@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AnalysisReport as Report, GeoPoint, PresetId, SegmentAnalysis, SegmentPosition } from '../types'
-import { fmt } from '../math/epure'
+import { fmt, traceCalcs } from '../math/epure'
 import { groupColor, groupLabel } from '../palette'
 import { nextPointName, presets } from '../presets'
 import { generateLine, LINE_TYPES } from '../generator'
 import { RtTriangle, RtModal } from './RtConstruction'
+import { TraceCalcLine, TracesHelp } from './TracesHelp'
 
 interface DataInputProps {
   points: GeoPoint[]
@@ -217,6 +218,8 @@ export function DataInput({ points, onChange, selectedId = null, onSelect }: Dat
 
 export function Analytics({ report }: { report: Report }) {
   const [zoomSeg, setZoomSeg] = useState<SegmentAnalysis | null>(null)
+  const [showTrHelp, setShowTrHelp] = useState(false)
+  const [showTrCalc, setShowTrCalc] = useState(false)
 
   // Групуємо відрізки за прямою (group), зберігаючи порядок появи.
   const byLine = useMemo(() => {
@@ -336,30 +339,65 @@ export function Analytics({ report }: { report: Report }) {
                 </div>
 
                 {/* Сліди прямих */}
-                <div className="mt-2 mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                  Сліди
+                <div className="mt-2 mb-1 flex items-center gap-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Сліди</span>
+                  <button
+                    onClick={() => setShowTrHelp((v) => !v)}
+                    className="h-4 w-4 rounded-full border border-slate-300 text-[10px] leading-none text-slate-500 transition hover:border-sky-500 hover:text-sky-600"
+                    title="Як будуються сліди?"
+                    aria-label="Як будуються сліди?"
+                  >
+                    ?
+                  </button>
+                  <label className="ml-auto flex cursor-pointer items-center gap-1 text-[10px] text-slate-400 select-none">
+                    <input
+                      type="checkbox"
+                      checked={showTrCalc}
+                      onChange={(e) => setShowTrCalc(e.target.checked)}
+                      className="h-3 w-3 accent-sky-600"
+                    />
+                    розрахунок
+                  </label>
                 </div>
-                {segments.map((seg, i) =>
-                  seg.traces.length > 0 ? (
+
+                {showTrHelp && <TracesHelp />}
+
+                {segments.map((seg, i) => {
+                  const calcs = showTrCalc ? traceCalcs(seg.from, seg.to) : []
+                  return (
                     <div key={i} className="mb-1 text-[11px] leading-4 text-slate-600">
-                      <span className="font-mono font-bold" style={{ color: groupColor(group) }}>{seg.label}:</span>{' '}
-                      {seg.traces
-                        .map((tr) => (
-                          <span key={tr.label}>
-                            {tr.label}
-                            <span className="text-slate-400">
-                              ({fmt(tr.x)}; {fmt(tr.y)}; {fmt(tr.z)}){tr.onSegment ? '' : ' · поза відр. '}
-                            </span>
-                          </span>
-                        ))
-                        .reduce<ReactNode[]>((acc, node, j) => (j === 0 ? [node] : [...acc, <span key={`s${j}`}>, </span>, node]), [])}
+                      <div>
+                        <span className="font-mono font-bold" style={{ color: groupColor(group) }}>
+                          {seg.label}:
+                        </span>{' '}
+                        {seg.traces.length > 0
+                          ? seg.traces
+                              .map((tr) => (
+                                <span key={tr.label}>
+                                  {tr.label}
+                                  <span className="text-slate-400">
+                                    ({fmt(tr.x)}; {fmt(tr.y)}; {fmt(tr.z)}){tr.onSegment ? '' : ' · поза відр. '}
+                                  </span>
+                                </span>
+                              ))
+                              .reduce<ReactNode[]>(
+                                (acc, node, j) => (j === 0 ? [node] : [...acc, <span key={`s${j}`}>, </span>, node]),
+                                [],
+                              )
+                          : (
+                            <span className="text-slate-500">паралельна площинам проєкцій</span>
+                          )}
+                      </div>
+                      {calcs.length > 0 && (
+                        <div className="mt-0.5 ml-2 space-y-px border-l border-slate-200 pl-2">
+                          {calcs.map((c) => (
+                            <TraceCalcLine key={c.plane} calc={c} />
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  ) : (
-                    <div key={i} className="mb-1 text-[11px] text-slate-500">
-                      <span className="font-mono font-bold" style={{ color: groupColor(group) }}>{seg.label}:</span> паралельна площинам проєкцій
-                    </div>
-                  ),
-                )}
+                  )
+                })}
               </div>
             ))}
           </div>
